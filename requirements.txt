@@ -1,0 +1,5 @@
+# PENGWIN 2026 Task 3 (Reduction) — 경량 컨테이너 requirements.
+# torch/nnUNet 불필요. 순수 numpy/scipy ICP + (선택적) trimesh OBJ 로더.
+numpy>=1.24,<3
+scipy>=1.10,<2
+trimesh>=4.0,<5
