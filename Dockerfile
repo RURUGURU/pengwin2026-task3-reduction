@@ -21,7 +21,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
 
 WORKDIR /opt/app
 
-# --- Python deps (순수 CPU; numpy/scipy/trimesh 만) --------------------------
+# --- Python deps (순수 CPU; numpy/scipy만) -----------------------------------
 COPY requirements.txt /opt/app/requirements.txt
 RUN pip install --upgrade pip && \
     pip install -r /opt/app/requirements.txt
