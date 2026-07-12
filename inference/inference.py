@@ -124,9 +124,23 @@ def predict_poses(obj_path):
     return poses
 
 
+def _resolve_input_obj(explicit=None):
+    """입력 OBJ 경로 결정. 스펙 기본 경로 → 없으면 `/input` 하위 *.obj glob(robust)."""
+    import glob
+    if explicit and os.path.exists(explicit):
+        return explicit
+    if os.path.exists(DEFAULT_INPUT_OBJ):
+        return DEFAULT_INPUT_OBJ
+    for pat in ("/input/*.obj", "/input/**/*.obj"):
+        hits = sorted(glob.glob(pat, recursive=True))
+        if hits:
+            return hits[0]
+    return explicit or DEFAULT_INPUT_OBJ
+
+
 def run(input_obj=None, output_json=None):
     """컨테이너 진입: OBJ 읽기 → 포즈 예측 → JSON 쓰기. 실패해도 빈 리스트라도 남긴다."""
-    input_obj = input_obj or DEFAULT_INPUT_OBJ
+    input_obj = _resolve_input_obj(input_obj)
     output_json = output_json or DEFAULT_OUTPUT_JSON
 
     poses = []
