@@ -11,11 +11,11 @@
 
 ---
 
-## 🚀 현재 배포 상태 (2026-07-22, v1.0)
+## 🚀 현재 배포 상태 (2026-07-22, **v3.0** — 통합 릴리스)
 
 | | |
 |---|---|
-| **배포 버전** | **v1.0** — git tag `v1.0` push → GC 자동 빌드. val 페이즈 제출용 |
+| **배포 버전** | **v3.0** — 3-태스크 통합 릴리스 태그 (내용 = v1.0, identity poses). GC 빌드는 `v3.0` 선택. val 페이즈 제출용 |
 | **출력 전략** | **모든 조각에 identity 행렬** (ICP는 `PENGWIN_T3_ICP=1` 일 때만 활성, 기본 OFF) |
 | **왜 identity인가** | 구현한 greedy overlap-ICP 와 RF pose-regressor **둘 다 identity보다 나빴다**. 정직한 negative result — §4 |
 | **베이스 이미지** | `python:3.10-slim` (GPU 불필요) |
