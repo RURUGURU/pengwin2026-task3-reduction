@@ -1,5 +1,6 @@
 #!/bin/bash
-# PENGWIN 2026 Task 3 (Reduction) 경량 ICP 컨테이너 빌드.
+# PENGWIN 2026 Task 3 (Reduction) v4.0 학습형 AssemblyTransformer 컨테이너 빌드
+# (torch CPU + trimesh + lightning + hydra; 실패 시 identity 폴백).
 #
 # 빌드 컨텍스트 = 저장소 루트(이 스크립트의 한 단계 위). Dockerfile 이 inference/ 와
 # requirements.txt 를 COPY 할 수 있도록 한다.

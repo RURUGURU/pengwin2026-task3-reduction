@@ -2,30 +2,30 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Python 3.10](https://img.shields.io/badge/python-3.10--slim-blue.svg)](https://www.python.org/)
-[![deps: numpy+scipy only](https://img.shields.io/badge/deps-numpy%20%2B%20scipy%20only-green.svg)](requirements.txt)
+[![deps: torch CPU + trimesh + lightning](https://img.shields.io/badge/deps-torch%20CPU%20%2B%20trimesh%20%2B%20lightning-green.svg)](requirements.txt)
 [![no GPU](https://img.shields.io/badge/GPU-not%20required-lightgrey.svg)](Dockerfile)
 
 > **PENGWIN 2026 Grand Challenge — Task 3**: 골절로 분리된 골반 조각 메시들을 **해부학적 정상 위치로 되돌리는 강체 변환(4×4)** 을 예측한다.
 >
-> 세그멘테이션이 아니라 **3D 강체 정합(assembly)** 문제다. 따라서 이 저장소는 torch·nnU-Net·GPU를 전혀 쓰지 않는다 — 순수 numpy/scipy.
+> 세그멘테이션이 아니라 **3D 강체 정합(assembly)** 문제다. 현재 배포판(v4.0)은 공식 **AssemblyTransformer** 학습 컨테이너다 — torch 2.4.1(**CPU**) + trimesh + lightning + hydra. nnU-Net·GPU는 쓰지 않는다.
 
 ---
 
-## 🚀 현재 배포 상태 (2026-07-22, **v3.0** — 통합 릴리스)
+## 🚀 현재 배포 상태 (2026-07-25, **v4.0** — 학습형 AssemblyTransformer)
 
 | | |
 |---|---|
-| **배포 버전** | **v3.0** — 3-태스크 통합 릴리스 태그 (내용 = v1.0, identity poses). GC 빌드는 `v3.0` 선택. val 페이즈 제출용 |
-| **출력 전략** | **모든 조각에 identity 행렬** (ICP는 `PENGWIN_T3_ICP=1` 일 때만 활성, 기본 OFF) |
-| **왜 identity인가** | 구현한 greedy overlap-ICP 와 RF pose-regressor **둘 다 identity보다 나빴다**. 정직한 negative result — §4 |
-| **베이스 이미지** | `python:3.10-slim` (GPU 불필요) |
-| **의존성** | `numpy>=1.24,<3`, `scipy>=1.10,<2` — 그게 전부 |
-| **모델 tarball** | **불필요** (identity 계산에 가중치 없음). Models 탭 비워둠 |
-| **로컬 빌드/검증** | ✅ `pengwin-task3-reduction:latest` **475MB** 빌드 성공. GC 동일조건 스모크(`--network none`, ro `/input`, 비root): **0.3초**, 12조각 4×4 row-major, SA1=identity, 조각 ID가 GT와 완전 일치. `fragment_id` 는 **문자열**(공식 스펙 `03-*.md:20` 준수 — GT json 의 int 와 다름) |
-| **GC 채점 이력** | **아직 없음** — val 페이즈 첫 제출 예정 |
+| **배포 버전** | **v4.0** (commit `02b02d2`, tag `v4.0`) — 공식 **AssemblyTransformer** 학습 컨테이너. val 페이즈 제출용 |
+| **출력 전략** | 벤더링한 baseline `inference.py` 를 서브프로세스로 실행 (`configs/test_gc.yaml` + `/opt/ml/model/model.ckpt`). **어떤 오류가 나든 identity 폴백** |
+| **v3.0 identity** | 여전히 **배포 floor** — v4.0 체크포인트가 강해질 때까지 mean 상 identity 아래일 수 있다. v4.0 은 재사용 가능한 인프라 + 실측 제출 |
+| **체크포인트** | simu-pretrain (연장 중) + 임상 LoRA 파인튜닝 |
+| **의존성** | torch **2.4.1 (CPU)** + trimesh + lightning + hydra (`requirements.txt`) — GPU 불필요 |
+| **모델 tarball** | `/opt/ml/model/model.ckpt` (학습 가중치). Models 탭에 업로드 |
+| **폴백 규약** | baseline 서브프로세스 실패 시 모든 조각 identity (SA1=identity 앵커 준수) |
+| **GC 채점 이력** | val 페이즈 제출 |
 
-> ℹ️ 공식 규정상 **결과 미제출 케이스는 identity로 간주**된다. 따라서 현재 컨테이너는 "실패 제출"과
-> 점수가 같다. 이는 인정된 사실이며, 왜 그럼에도 이것이 옳은 선택인지는 §4·§6에 정량적으로 기록했다.
+> ℹ️ 공식 규정상 **결과 미제출 케이스는 identity로 간주**된다. v4.0 은 그 위에 학습형 포즈를 얹되,
+> **어떤 실패에도 identity 로 폴백**하므로 하방 위험이 없다.
 > **val 을 먼저 올리는 진짜 이유는 점수가 아니라, 최종 테스트 페이즈가 metrics.json 을 돌려주는지
 > 그리고 로컬 게이트를 GC 에 캘리브레이션할 값을 얻기 위함이다** (하방 위험 0, 마지막 런만 채점되므로
 > 나중에 개선판으로 교체 가능).
@@ -242,11 +242,12 @@ python eval_reduction.py <clinical_mesh_dir> [--icp] [--n N]
 
 ```
 .
-├── Dockerfile              python:3.10-slim, GPU 불필요
-├── requirements.txt        numpy, scipy 뿐
+├── Dockerfile              GPU 불필요 (torch CPU)
+├── requirements.txt        torch 2.4.1 (CPU) + trimesh + lightning + hydra
 ├── inference/
-│   ├── inference.py        ★ 진입점 (기본 identity, ICP는 env-gated)
-│   └── reduction.py        OBJ 파싱 + Kabsch + ICP + greedy 조립
+│   ├── inference.py        ★ 진입점 (baseline 서브프로세스 실행, 실패 시 identity 폴백)
+│   └── reduction.py        OBJ 파싱 + Kabsch + ICP + greedy 조립 (identity 폴백 백엔드)
+├── baseline/               벤더링한 공식 AssemblyTransformer (configs/test_gc.yaml + inference.py)
 └── scripts/build_image.sh
 ```
 
