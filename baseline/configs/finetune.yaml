@@ -1,0 +1,45 @@
+# @package _global_
+# LoRA fine-tuning on clinical data.
+#
+# Workflow:
+#   1. Pre-train:   python train.py --config-name train
+#   2. Fine-tune:   python train.py --config-name finetune
+#
+# Set model.checkpoint to your pre-trained simulation checkpoint before running.
+
+defaults:
+  - model: AssemblyTransformer_coords
+  - trainer: lora
+  - hydra: default
+  - callbacks: default
+  - data: multibone_fragments
+  - _self_
+
+project_name: assemble_coord_lora
+experiment_name: assemble_coord_lora
+seed: 42
+
+model:
+  training_mode: lora
+  lora_rank: 32
+  lora_alpha: 64.0
+  checkpoint: ./checkpoints/assemble_coord_baseline.ckpt  # your sim pre-trained checkpoint
+  optimizer:
+    lr: 2e-4
+
+# Override data to use clinical data
+data:
+  data_type: mix_balanced
+  region_dropout_prob: 0.1
+  point_jitter_std: 0.002
+  batch_size: 8
+  drop_prob: 0.15
+  real_pose_ratio: 0.3
+
+# Allow more epochs before early stopping; save only best + last
+callbacks:
+  early_stopping:
+    patience: 60
+  model_checkpoint:
+    save_top_k: 1
+    save_last: true

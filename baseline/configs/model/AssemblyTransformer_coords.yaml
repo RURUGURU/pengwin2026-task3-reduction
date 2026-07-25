@@ -1,0 +1,39 @@
+# ==============================================================================
+# Global Lightning Module Configuration
+# ==============================================================================
+_target_: models.AssemblyNet.lightning_module.AssemblyLightningModule
+output_type: "coords"  # Mode switch: "coords" or "pose"
+save_vis_path: ./output/${experiment_name}
+
+# Training mode: "full" for standard training, "lora" for LoRA fine-tuning
+training_mode: "full"
+
+# Path to pretrained checkpoints for LoRA fine-tuning (null = train from scratch)
+checkpoint: null
+lora_rank: 16
+lora_alpha: 32.0
+
+# ------------------------------------------------------------------------------
+# Core Transformer Architecture Configuration
+# (Corresponds to the 'transformer_model' parameter in __init__)
+# ------------------------------------------------------------------------------
+transformer_model:
+  _target_: models.AssemblyNet.transformer.AssemblyTransformer
+  max_parts: 50
+  embed_dim: 384
+  num_layers: 12
+  num_heads: 8
+  dropout_rate: 0.0
+  output_type: ${..output_type}
+
+# ------------------------------------------------------------------------------
+# Optimizer Configuration
+# (_partial_: True defers instantiation until network parameters are ready)
+# ------------------------------------------------------------------------------
+optimizer:
+  _target_: torch.optim.AdamW
+  _partial_: True
+  lr: 1e-4
+  weight_decay: 0.01
+  betas: [0.9, 0.999]
+

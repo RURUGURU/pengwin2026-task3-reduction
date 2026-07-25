@@ -1,0 +1,10 @@
+model_config: "model/AssemblyTransformer_coords"
+checkpoint: /opt/ml/model/model.ckpt
+input_dir: /tmp/t3in
+npoints: 5000
+max_iters: 10
+convergence_threshold: 2.0
+debug_vis: false
+output_type: "coords"
+experiment_name: "assemble_coord"
+training_mode: full

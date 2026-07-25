@@ -1,0 +1,27 @@
+_target_: datasets.fractures.FragmentDataModule
+
+data_root_sim: "/PENGWIN26_task3_simulation_fractures_train/points"       # path to simulation data
+data_root_real: "/PENGWIN26_task3_clinical_fractures_train/points"  # path to clinical data
+
+
+# Data mode: 'simu' | 'real' | 'mix' | 'mix_balanced'
+data_type: simu
+
+# Fragment sampling
+min_parts: 2
+max_parts: 50
+npoints_per_bone: 5000   # points sampled per bone (clinical data only)
+
+# Augmentation
+merge_prob: 0.15
+frac_prob: 0.70
+drop_prob: 0.1
+random_anchor: true
+
+# Sim2Real augmentations (0 = disabled)
+region_dropout_prob: 0.1   # probability of dropping a spherical region per fragment
+point_jitter_std: 0.002     # std of Gaussian noise on input coordinates
+
+# DataLoader
+batch_size: 10
+num_workers: 5

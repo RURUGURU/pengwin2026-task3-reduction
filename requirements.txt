@@ -1,4 +1,8 @@
-# PENGWIN 2026 Task 3 (Reduction) — 경량 컨테이너 requirements.
-# torch/nnUNet 불필요. reduction.py는 순수 numpy/scipy(cKDTree ICP + SVD Kabsch)만 사용.
-numpy>=1.24,<3
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.4.1
+numpy>=1.24,<2
 scipy>=1.10,<2
+trimesh==4.8.2
+omegaconf>=2.3
+hydra-core>=1.3
+lightning>=2.0

@@ -1,0 +1,22 @@
+# Inference configuration
+model_config: "model/AssemblyTransformer_coords"
+
+# Path to trained checkpoint
+checkpoint: ./checkpoints/assemble_coord_baseline_854.ckpt
+
+# Input: directory containing patient subdirectories with .obj files
+input_dir: ./data/test_set/mesh
+
+# Point cloud sampling per bone
+npoints: 5000
+
+# Iterative refinement
+max_iters: 10
+convergence_threshold: 2.0
+
+# Debug visualization (requires display)
+debug_vis: false
+
+# Must match the training config
+output_type: "coords"
+experiment_name: "assemble_coord_baseline"
