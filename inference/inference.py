@@ -50,11 +50,14 @@ def main():
             [sys.executable, str(BASE / "inference.py"), "--config", os.environ.get("PENGWIN_T3_CONFIG","configs/test_gc.yaml"), "--input_dir", "/tmp/t3in"],
             cwd=str(BASE), capture_output=True, text=True, timeout=540,
         )
-        out = work / "reduction-poses-matrices.json"
-        if out.exists():
-            poses = json.load(open(out))
+        # baseline names the file per training_mode/output_type: "reduction-poses-matrices.json"
+        # for full/coords, but "..._lora.json" (or "..._pose.json") otherwise. Glob any suffix so
+        # a config change (e.g. training_mode=lora in v4.1) can't silently drop us to identity.
+        outs = sorted(work.glob("reduction-poses-matrices*.json"))
+        if outs:
+            poses = json.load(open(outs[0]))
         else:
-            sys.stderr.write(f"[t3] baseline produced no output; stderr tail:\n{r.stderr[-2000:]}\n")
+            sys.stderr.write(f"[t3] baseline produced no output (rc={r.returncode}); stderr tail:\n{r.stderr[-2000:]}\n")
     except Exception as exc:
         sys.stderr.write(f"[t3] learned inference failed ({exc}) -> identity fallback\n")
     if not poses:

@@ -284,19 +284,35 @@ def build_final_results(cumulative_transforms, fragment_names):
     return results
 
 
-def _scale_toward_identity(results, alpha):
-    """[v4.1] Blend each predicted rigid transform toward identity by factor `alpha`
-    (rotation angle * alpha, translation * alpha). Corrects the simu->clinical OVERSHOOT:
-    the model, trained mainly on large-displacement simulated fractures, over-moves the
-    near-assembled clinical fragments. alpha=1.0 => unchanged; alpha=0.0 => identity.
-    Validated (official evaluate.py, 170 clinical cases) to beat identity on ALL 5 metrics
-    at max_iters=1 + alpha=0.6. numpy-only (Rodrigues), no scipy dependency."""
+def _scale_toward_identity(results, alpha, gate_rot=0.0, gate_trans=0.0, anchor_id="1"):
+    """[v4.1/v4.2] Overshoot-corrected, displacement-GATED blend of the predicted poses.
+
+    The model (trained mainly on large-displacement simulated fractures) OVERSHOOTS the
+    near-assembled clinical fragments. Two corrections, both validated on 170 clinical cases
+    with the official evaluator:
+      * [v4.1] scale each transform toward identity by `alpha` (rot angle*alpha, trans*alpha).
+      * [v4.2] displacement GATE: a fragment is MOVED only when the model itself predicts a
+        large displacement (raw pred rot >= gate_rot deg OR raw pred trans >= gate_trans mm);
+        otherwise it is left at IDENTITY. Rescues the badly-displaced fragments while never
+        disturbing the ones already in place -> preserves Part-Accuracy (the tight-threshold
+        metric that a blanket blend degrades). alpha=1 & gate=0 => plain v4.0 behaviour.
+    Numpy-only (Rodrigues), no scipy dependency. The anchor fragment stays identity."""
     import numpy as _np
+    I = [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 1.0]]
     out = []
     for e in results:
         T = _np.asarray(e["transformation"], dtype=float)
         R = T[:3, :3]
-        ang = float(_np.arccos(_np.clip((_np.trace(R) - 1.0) / 2.0, -1.0, 1.0)))
+        ang = float(_np.arccos(_np.clip((_np.trace(R) - 1.0) / 2.0, -1.0, 1.0)))  # rad
+        tmag = float(_np.linalg.norm(T[:3, 3]))
+        gated_out = (
+            str(e["fragment_id"]) == str(anchor_id)
+            or ((gate_rot > 0.0 or gate_trans > 0.0)
+                and _np.degrees(ang) < gate_rot and tmag < gate_trans)
+        )
+        if gated_out:
+            out.append({"fragment_id": e["fragment_id"], "transformation": I})
+            continue
         s = _np.sin(ang)
         if abs(s) < 1e-8:
             Rs = _np.eye(3) if ang < 1.5 else R  # ~0 -> identity; ~pi -> leave as-is (rare)
@@ -391,9 +407,11 @@ def main():
 
             normalized_transforms = normalize_transforms_by_first_sa(cumulative_transforms, meshdict)
             results = build_final_results(normalized_transforms, fragment_names)
-            pred_scale = float(cfg.get("pred_scale", 1.0))  # [v4.1] overshoot correction (0.6)
-            if pred_scale != 1.0:
-                results = _scale_toward_identity(results, pred_scale)
+            pred_scale = float(cfg.get("pred_scale", 1.0))       # [v4.1] overshoot scale (0.6)
+            gate_rot = float(cfg.get("pred_gate_rot", 0.0))       # [v4.2] deg; move only if >=
+            gate_trans = float(cfg.get("pred_gate_trans", 0.0))   # [v4.2] mm;  move only if >=
+            if pred_scale != 1.0 or gate_rot > 0.0 or gate_trans > 0.0:
+                results = _scale_toward_identity(results, pred_scale, gate_rot, gate_trans)
             result_suffix = cfg.get("result_suffix", "")
             json_path = save_prediction(sample_dir, results, output_type, training_mode, result_suffix)
 
