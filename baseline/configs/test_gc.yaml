@@ -2,22 +2,56 @@ model_config: "model/AssemblyTransformer_coords"
 checkpoint: /opt/ml/model/model.ckpt
 input_dir: /tmp/t3in
 npoints: 5000
-# [v4.1] max_iters=1 (was 10): the 10-iter refinement COMPOUNDS the simu->clinical overshoot;
-#        a single step is well-calibrated.  pred_scale=0.6 blends the prediction toward identity.
-# [v4.2] pred_gate_rot/trans: a fragment is MOVED only when the model predicts a large
-#        displacement (raw pred rot >= 8 deg OR raw pred trans >= 12 mm); otherwise kept at
-#        IDENTITY. Rescues badly-displaced fragments while never disturbing near-assembled ones,
-#        preserving Part-Accuracy. Validated official evaluate.py, 170 clinical cases — beats
-#        identity on ALL 5: Trans 6.22<7.19, Rot 7.24<7.86, TRE 5.08<5.80, CD 5.09<5.64, PA 60.0>56.8.
+
+# [v4.5] The model is now the WIDE-AUG SIMULATION PRETRAIN (epoch 139), with NO clinical LoRA.
+#
+# Why the LoRA is gone. The v4.1/v4.2 lineage was a clinical LoRA on a NARROW-aug pretrain
+# (+-15 deg rotation augmentation against a clinical p95 of ~32 deg), which saturated the rotation
+# head: its RAW poses scored WORSE than identity (PA 0.4762 vs 0.5673 over the 170 clinical cases),
+# which is exactly why v4.1/v4.2 had to drag them back toward identity to score at all.
+# Retraining with a fat-tailed mixture augmentation (30% wide at 45 deg / 60 mm, 70% narrow) removed
+# the saturation. Measured on all 170 clinical cases with the official evaluator, raw poses, no
+# policy at all:
+#     deployed v4.2 (with its shipped policy)   rot 7.2096  tre 5.1000  cd 5.0950  PA 0.5981
+#     ep139 raw                                 rot 6.0484  tre 3.9326  cd 4.3432  PA 0.6591
+# +0.0610 PA = 4.7x the measured +-0.013 run-to-run noise, reproduced on three independent
+# checkpoints (ep134 0.6430, ep144 0.6499). The comparison is BIASED AGAINST the new model:
+# clinical.py splits at int(170*0.9), so v4.2's LoRA trained on 153 of the very cases it is scored
+# on, while ep139 has seen zero clinical data. On the 17 cases neither lineage fine-tuned on,
+# rot/tre/cd are significantly better (14-15 of 17, p ~ 0.003).
+# A clinical LoRA was then trained ON TOP of ep139 (v4.3) and it made things WORSE: PA 0.6362,
+# 0.023 below ep139 raw, with rot regressing 6.048 -> 6.433 -- partial re-saturation. So the LoRA
+# stage was part of the problem, not the cure.
+training_mode: full
+
 max_iters: 1
-pred_scale: 0.6
-pred_gate_rot: 8.0
-pred_gate_trans: 12.0
 convergence_threshold: 2.0
+pred_scale: 1.0
+
+# [v4.5] Two-sided revert policy over the raw poses, replacing the v4.1/v4.2 blend-toward-identity.
+#   catastrophe    centroid move > 30 mm OR rotation > 25 deg -> revert to identity
+#                  (the model occasionally throws a fragment across the scene; not moving it is
+#                   strictly better than moving it there)
+#   anti-overshoot centroid move < 12 mm AND rotation < 6 deg -> revert to identity
+#                  (a fragment the model barely wants to move is already near-assembled, and
+#                   nudging it costs Part-Accuracy, which uses a tight threshold)
+# Chosen from a FLAT region rather than by argmax. Across the swept anti-overshoot grid at
+# ao_a in {5,6} the PA range is 0.6823-0.6888 -- a spread of 0.0065, BELOW the 0.013 noise floor --
+# so the choice inside that band is not really a choice. ao_a >= 8 falls away (0.64-0.67), so ao_a
+# is the sensitive axis and 5-6 is its safe band, while ao_d is nearly flat from 8 to 15.
+# (12, 6) is interior on both axes of the sweep, so it is not sitting on a boundary. The honest
+# expectation is the plateau mean, ~0.684, not the 0.6888 of that single cell.
+# Setting all four to 0 disables the policy and ships the raw poses (PA 0.6591) -- the v4.4
+# fallback, which involves no policy selection at all.
+pred_cat_d: 30.0
+pred_cat_a: 25.0
+pred_ao_d: 12.0
+pred_ao_a: 6.0
+
+# v4.1/v4.2 blend-toward-identity, superseded by the revert policy above; left at no-op values.
+pred_gate_rot: 0.0
+pred_gate_trans: 0.0
+
 debug_vis: false
 output_type: "coords"
-experiment_name: "assemble_coord_lora"
-# [v4.1] LoRA fine-tuned model (simu-ep79 base + clinical LoRA). model.ckpt = lora_ep26.ckpt.
-training_mode: lora
-lora_rank: 32
-lora_alpha: 64.0
+experiment_name: "assemble_coord_pretrain_wide"
