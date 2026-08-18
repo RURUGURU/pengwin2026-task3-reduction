@@ -83,15 +83,11 @@ def load_config_and_model(config_path, device, debug_vis=None):
     vis = cfg.get("debug_vis", False)
 
     training_mode = cfg.get("training_mode", "full")
-    lora_rank = cfg.get("lora_rank", 16)
-    lora_alpha = cfg.get("lora_alpha", 32.0)
     model = AssemblyLightningModule(
         transformer_model=transformer,
         optimizer=partial(torch.optim.AdamW, lr=1e-4, weight_decay=0.01),
         output_type=output_type,
         training_mode=training_mode,
-        lora_rank=lora_rank,
-        lora_alpha=lora_alpha,
         debug_vis=vis,
     )
 
@@ -284,50 +280,6 @@ def build_final_results(cumulative_transforms, fragment_names):
     return results
 
 
-def _scale_toward_identity(results, alpha, gate_rot=0.0, gate_trans=0.0, anchor_id="1"):
-    """[v4.1/v4.2] Overshoot-corrected, displacement-GATED blend of the predicted poses.
-
-    The model (trained mainly on large-displacement simulated fractures) OVERSHOOTS the
-    near-assembled clinical fragments. Two corrections, both validated on 170 clinical cases
-    with the official evaluator:
-      * [v4.1] scale each transform toward identity by `alpha` (rot angle*alpha, trans*alpha).
-      * [v4.2] displacement GATE: a fragment is MOVED only when the model itself predicts a
-        large displacement (raw pred rot >= gate_rot deg OR raw pred trans >= gate_trans mm);
-        otherwise it is left at IDENTITY. Rescues the badly-displaced fragments while never
-        disturbing the ones already in place -> preserves Part-Accuracy (the tight-threshold
-        metric that a blanket blend degrades). alpha=1 & gate=0 => plain v4.0 behaviour.
-    Numpy-only (Rodrigues), no scipy dependency. The anchor fragment stays identity."""
-    import numpy as _np
-    I = [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 1.0]]
-    out = []
-    for e in results:
-        T = _np.asarray(e["transformation"], dtype=float)
-        R = T[:3, :3]
-        ang = float(_np.arccos(_np.clip((_np.trace(R) - 1.0) / 2.0, -1.0, 1.0)))  # rad
-        tmag = float(_np.linalg.norm(T[:3, 3]))
-        gated_out = (
-            str(e["fragment_id"]) == str(anchor_id)
-            or ((gate_rot > 0.0 or gate_trans > 0.0)
-                and _np.degrees(ang) < gate_rot and tmag < gate_trans)
-        )
-        if gated_out:
-            out.append({"fragment_id": e["fragment_id"], "transformation": I})
-            continue
-        s = _np.sin(ang)
-        if abs(s) < 1e-8:
-            Rs = _np.eye(3) if ang < 1.5 else R  # ~0 -> identity; ~pi -> leave as-is (rare)
-        else:
-            axis = _np.array([R[2, 1] - R[1, 2], R[0, 2] - R[2, 0], R[1, 0] - R[0, 1]]) / (2.0 * s)
-            a2 = ang * alpha
-            K = _np.array([[0, -axis[2], axis[1]], [axis[2], 0, -axis[0]], [-axis[1], axis[0], 0]])
-            Rs = _np.eye(3) + _np.sin(a2) * K + (1.0 - _np.cos(a2)) * (K @ K)
-        M = _np.eye(4)
-        M[:3, :3] = Rs
-        M[:3, 3] = T[:3, 3] * alpha
-        out.append({"fragment_id": e["fragment_id"], "transformation": M.tolist()})
-    return out
-
-
 def _rot_angle_deg(R):
     import numpy as _np
     return float(_np.degrees(_np.arccos(_np.clip((_np.trace(R) - 1.0) / 2.0, -1.0, 1.0))))
@@ -344,14 +296,12 @@ def _centroid_disp_mm(T, verts):
     return float(_np.linalg.norm(c1 - c0))
 
 
-def _catastrophe_antiovershoot(results, meshdict, cat_d, cat_a, ao_d, ao_a, pred_scale, anchor_id):
+def _catastrophe_antiovershoot(results, meshdict, cat_d, cat_a, ao_d, ao_a, anchor_id):
     """[v4.5] Two-sided revert policy, applied to the RAW predicted poses.
 
-    Verbatim port of the `kind: "gate"` policy in
-    code_task3/prelim_validation/score_policies.py::make_pred, which is what the 170-case
-    measurements were produced with. Ported rather than reimplemented so the container reproduces
-    those numbers exactly; a port-equivalence test compares it against the reference on the cached
-    poses.
+    170-case 검증에서 선택된 `kind: "gate"` 정책을 제출 컨테이너에 고정한 구현이다.
+    검증 결과와 선택 근거는
+    `submission_task3/reports/evaluations/v4_5/policy_scores_170.json`에 보존한다.
 
       catastrophe revert   d > cat_d or ang > cat_a  -> identity
                            the model occasionally throws a fragment across the scene; such a
@@ -359,16 +309,11 @@ def _catastrophe_antiovershoot(results, meshdict, cat_d, cat_a, ao_d, ao_a, pred
       anti-overshoot revert  d < ao_d and ang < ao_a -> identity
                            a fragment the model barely wants to move is already near-assembled,
                            and nudging it costs Part-Accuracy, which uses a tight threshold.
-      otherwise            keep the prediction (optionally scaled toward identity by pred_scale)
+      otherwise            keep the raw prediction
       anchor fragment      always identity
 
-    Distinct from _scale_toward_identity (v4.1/v4.2), which blends EVERY non-gated fragment toward
-    identity by alpha. Measured on the 170 clinical cases with the ep139 wide-aug pretrain:
-      raw (no policy)                     PA 0.6591
-      v4.2 policy (alpha .6, gate 8/12)   PA 0.6539
-      cat 30/25 + anti-overshoot          PA 0.68+ across a broad plateau of (ao_d, ao_a)
-    `d` uses the official evaluation geometry (mesh vertices), and the anchor is the numerically
-    first SA fragment -- both available at inference time, no ground truth required."""
+    `d`는 mesh vertex의 실제 중심 이동을 사용한다. anchor는 숫자가 가장 작은 SA 조각이며
+    둘 다 inference 시점에 입력만으로 계산되므로 GT를 사용하지 않는다."""
     import numpy as _np
     I = [[1.0, 0, 0, 0], [0, 1.0, 0, 0], [0, 0, 1.0, 0], [0, 0, 0, 1.0]]
     # load_obj_fragments stores {'mesh': Trimesh, 'volume': float} per fragment, NOT a bare Trimesh.
@@ -396,10 +341,7 @@ def _catastrophe_antiovershoot(results, meshdict, cat_d, cat_a, ao_d, ao_a, pred
             out.append({"fragment_id": e["fragment_id"], "transformation": I}); continue
         if d < ao_d and ang < ao_a:
             out.append({"fragment_id": e["fragment_id"], "transformation": I}); continue
-        if pred_scale != 1.0:
-            out.append(_scale_toward_identity([e], pred_scale, 0.0, 0.0, anchor_id="__none__")[0])
-        else:
-            out.append({"fragment_id": e["fragment_id"], "transformation": T.tolist()})
+        out.append({"fragment_id": e["fragment_id"], "transformation": T.tolist()})
     return out
 
 
@@ -439,8 +381,7 @@ def main():
     # numbers were produced with. That matters twice over -- the reported PA would be one draw of a
     # stochastic pipeline rather than a property of the model, and the anti-overshoot revert
     # thresholds sit close enough to that noise to flip individual fragments across them.
-    # Seeded with 0, matching prelim_validation/dump_raw_poses.py, so the container reproduces the
-    # measured configuration exactly.
+    # 보존된 170-case 검증과 같은 seed=0을 기본값으로 사용해 제출 추론을 재현한다.
     seed = int(os.environ.get("PENGWIN_T3_SEED", "0"))
     np.random.seed(seed)
     torch.manual_seed(seed)
@@ -505,12 +446,8 @@ def main():
 
             normalized_transforms = normalize_transforms_by_first_sa(cumulative_transforms, meshdict)
             results = build_final_results(normalized_transforms, fragment_names)
-            pred_scale = float(cfg.get("pred_scale", 1.0))       # [v4.1] overshoot scale (0.6)
-            gate_rot = float(cfg.get("pred_gate_rot", 0.0))       # [v4.2] deg; move only if >=
-            gate_trans = float(cfg.get("pred_gate_trans", 0.0))   # [v4.2] mm;  move only if >=
-            # [v4.5] catastrophe / anti-overshoot revert. Takes precedence over the v4.1/v4.2 blend
-            # when enabled: the two are alternative policies over the same raw poses, and applying
-            # both would compose two independent reverts.
+            # v4.5의 유일한 후처리: 과도한 이동과 거의 움직이지 않는 조각을 identity로 되돌린다.
+            # 실제 제출 값은 configs/test_gc.yaml에서 관리하고, 0이면 해당 축의 gate를 끈다.
             cat_d = float(cfg.get("pred_cat_d", 0.0))             # mm; revert above this centroid move
             cat_a = float(cfg.get("pred_cat_a", 0.0))             # deg; revert above this rotation
             ao_d = float(cfg.get("pred_ao_d", 0.0))               # mm; revert below this AND below ao_a
@@ -520,10 +457,8 @@ def main():
                     results, meshdict,
                     cat_d if cat_d > 0.0 else float("inf"),
                     cat_a if cat_a > 0.0 else float("inf"),
-                    ao_d, ao_a, pred_scale,
+                    ao_d, ao_a,
                     _first_sa_fragment_id(meshdict, results))
-            elif pred_scale != 1.0 or gate_rot > 0.0 or gate_trans > 0.0:
-                results = _scale_toward_identity(results, pred_scale, gate_rot, gate_trans)
             result_suffix = cfg.get("result_suffix", "")
             json_path = save_prediction(sample_dir, results, output_type, training_mode, result_suffix)
 
@@ -553,5 +488,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

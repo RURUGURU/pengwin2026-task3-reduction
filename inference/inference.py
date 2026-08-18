@@ -50,19 +50,20 @@ def main():
             [sys.executable, str(BASE / "inference.py"), "--config", os.environ.get("PENGWIN_T3_CONFIG","configs/test_gc.yaml"), "--input_dir", "/tmp/t3in"],
             cwd=str(BASE), capture_output=True, text=True, timeout=540,
         )
-        # baseline names the file per training_mode/output_type: "reduction-poses-matrices.json"
-        # for full/coords, but "..._lora.json" (or "..._pose.json") otherwise. Glob any suffix so
-        # a config change (e.g. training_mode=lora in v4.1) can't silently drop us to identity.
+        # 최종 full/coords 설정은 기본 파일명을 쓰지만 result_suffix가 붙어도 결과를 잃지 않도록
+        # 같은 prefix의 JSON을 찾는다. 출력이 없을 때만 아래 identity 형식 fallback으로 간다.
         outs = sorted(work.glob("reduction-poses-matrices*.json"))
         if outs:
-            poses = json.load(open(outs[0]))
+            with outs[0].open() as f:
+                poses = json.load(f)
         else:
             sys.stderr.write(f"[t3] baseline produced no output (rc={r.returncode}); stderr tail:\n{r.stderr[-2000:]}\n")
     except Exception as exc:
         sys.stderr.write(f"[t3] learned inference failed ({exc}) -> identity fallback\n")
     if not poses:
         poses = _identity(obj)
-    json.dump(poses, open(OUT_JSON, "w"), indent=2)
+    with open(OUT_JSON, "w") as f:
+        json.dump(poses, f, indent=2)
     print(f"[t3] wrote {len(poses)} poses -> {OUT_JSON}")
     return 0
 

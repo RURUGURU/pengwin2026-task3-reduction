@@ -9,8 +9,10 @@ Supports four data modes via `data_type`:
 
 Typical workflow:
     1. Pre-train on simulation:  data_type: simu
-    2. Fine-tune on clinical:    data_type: real  (with training_mode: lora)
-    3. Joint training:           data_type: mix_balanced
+    2. Optional full-model training on clinical: data_type: real
+    3. Optional joint full-model training: data_type: mix_balanced
+
+최종 v4.5는 1번 simulation pretraining만 사용하며 clinical 데이터로 fine-tuning하지 않는다.
 """
 
 import random

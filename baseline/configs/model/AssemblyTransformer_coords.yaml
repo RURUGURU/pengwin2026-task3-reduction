@@ -5,13 +5,11 @@ _target_: models.AssemblyNet.lightning_module.AssemblyLightningModule
 output_type: "coords"  # Mode switch: "coords" or "pose"
 save_vis_path: ./output/${experiment_name}
 
-# Training mode: "full" for standard training, "lora" for LoRA fine-tuning
+# 최종 v4.5 계보는 simulation full training만 사용한다.
 training_mode: "full"
 
-# Path to pretrained checkpoints for LoRA fine-tuning (null = train from scratch)
+# null이면 scratch, 경로를 주면 full-model warm start로 불러온다.
 checkpoint: null
-lora_rank: 16
-lora_alpha: 32.0
 
 # ------------------------------------------------------------------------------
 # Core Transformer Architecture Configuration
@@ -36,4 +34,3 @@ optimizer:
   lr: 1e-4
   weight_decay: 0.01
   betas: [0.9, 0.999]
-

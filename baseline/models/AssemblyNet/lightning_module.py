@@ -19,8 +19,6 @@ class AssemblyLightningModule(L.LightningModule):
             optimizer: "partial[torch.optim.Optimizer]",
             output_type: str = "coords",
             training_mode: str = "full",
-            lora_rank: int = 16,
-            lora_alpha: float = 32.0,
             save_vis_path: str = "./output",
             debug_vis: bool = False,
             checkpoint: Optional[str] = None,
@@ -35,12 +33,13 @@ class AssemblyLightningModule(L.LightningModule):
         self.base_vis_path = save_vis_path
         self.save_vis_path_val = None
 
+        if training_mode != "full":
+            raise ValueError(
+                f"최종 Task 3 연구 사본은 full training만 지원합니다: {training_mode!r}"
+            )
+
         if checkpoint is not None:
             self._load_pretrained_weights(checkpoint)
-
-        if training_mode == "lora":
-            from .lora import apply_lora_to_transformer
-            apply_lora_to_transformer(self.transformer_model, rank=lora_rank, alpha=lora_alpha)
 
     def on_fit_start(self):
         if self.trainer.is_global_zero:
@@ -51,7 +50,7 @@ class AssemblyLightningModule(L.LightningModule):
             print(f"[Model] {mode_str}  {param_str}")
 
     def _load_pretrained_weights(self, checkpoint_path: str):
-        """Load pretrained weights into the transformer before LoRA wrapping."""
+        """사전학습 checkpoint에서 Transformer 가중치를 불러온다."""
         ckpt = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
         if "state_dict" in ckpt:
@@ -152,7 +151,18 @@ class AssemblyLightningModule(L.LightningModule):
 
         if self.output_type == "coords":
             pred_coords = output_dict["pred_coords"]
-            loss = F.mse_loss(pred_coords, gt_coords, reduction="mean")
+            if os.environ.get("PENGWIN_BALANCED_LOSS", "0") == "1" and "part_batch_ids" in output_dict:
+                # Per-fragment-balanced MSE: equal weight per fragment (not per point), so
+                # small fragments — the PA killers that a flat all-points MSE under-weights —
+                # get an equal say. Aligns the objective with the per-fragment PA metric.
+                ids = output_dict["part_batch_ids"]
+                per_pt = ((pred_coords - gt_coords) ** 2).mean(dim=-1)
+                n_parts = int(ids.max().item()) + 1
+                sum_e = torch.zeros(n_parts, device=per_pt.device, dtype=per_pt.dtype).scatter_add_(0, ids, per_pt)
+                cnt = torch.zeros(n_parts, device=per_pt.device, dtype=per_pt.dtype).scatter_add_(0, ids, torch.ones_like(per_pt))
+                loss = (sum_e / cnt.clamp(min=1)).mean()
+            else:
+                loss = F.mse_loss(pred_coords, gt_coords, reduction="mean")
             return {"loss": loss}
 
         elif self.output_type == "pose":
@@ -233,6 +243,24 @@ class AssemblyLightningModule(L.LightningModule):
             self.log("val/trans_err", trans_err.mean(), on_epoch=True, sync_dist=True, batch_size=n_parts)
             self.log("val/tre", tre, on_epoch=True, sync_dist=True, batch_size=batch_size)
 
+            # PA-proxy: fraction of fragments whose mean per-point paired distance (in the
+            # normalized unit-sphere coords, the same space evaluate.py normalizes PA into) is < 0.05.
+            # Mirrors the competition PA so ModelCheckpoint(monitor='val/pa', mode=max) selects the
+            # max-PA epoch instead of the min-MSE epoch (they diverge; MSE is outlier-dominated).
+            pids = output_dict["part_batch_ids"]
+            per_pt_d = torch.norm(pred_assembled - data_dict["pointclouds_gt"].float(), dim=-1)
+            npa = int(pids.max().item()) + 1
+            sum_d = torch.zeros(npa, device=per_pt_d.device, dtype=per_pt_d.dtype).scatter_add_(0, pids, per_pt_d)
+            cnt_d = torch.zeros(npa, device=per_pt_d.device, dtype=per_pt_d.dtype).scatter_add_(0, pids, torch.ones_like(per_pt_d))
+            frag_d = sum_d / cnt_d.clamp(min=1)
+            self.log("val/pa", (frag_d < 0.05).float().mean(), on_epoch=True, prog_bar=True, sync_dist=True, batch_size=npa)
+
+            # Rotation-saturation diagnostic: magnitude of the PREDICTED rotations. The under-trained
+            # narrow-aug model caps at ~5.5deg; a cured model should emit up to the clinical range (>20deg).
+            pred_rot_mag = torch.rad2deg(2.0 * torch.acos(pred_quat.float()[:, 0].abs().clamp(max=1.0)))
+            self.log("val/pred_rot_max", pred_rot_mag.max(), on_epoch=True, sync_dist=True, batch_size=n_parts)
+            self.log("val/pred_rot_mean", pred_rot_mag.mean(), on_epoch=True, sync_dist=True, batch_size=n_parts)
+
         if self.debug_vis and batch_idx < 10:
             if self.output_type == "coords":
                 pred_assemble = enforce_rigid_transform_svd(
@@ -280,6 +308,14 @@ class AssemblyLightningModule(L.LightningModule):
         optimizer = self.optimizer(param_groups)
 
         total_steps = self.trainer.estimated_stepping_batches
+        # OneCycle is stepped per optimizer step, so total_steps encodes devices x batch_size x
+        # accumulate_grad_batches. When a run is MOVED between machines (e.g. 2-GPU DDP -> a single
+        # GPU) this number must come out identical to the one baked into the checkpoint being
+        # resumed, or the restored scheduler state points into a different curve. Printing it makes
+        # that check possible before a single step is taken.
+        print(f"[sched] estimated_stepping_batches(total_steps)={total_steps} "
+              f"devices={self.trainer.num_devices} accumulate={self.trainer.accumulate_grad_batches} "
+              f"batches_per_epoch={self.trainer.num_training_batches}", flush=True)
         scheduler = torch.optim.lr_scheduler.OneCycleLR(
             optimizer,
             max_lr=base_lr,
